@@ -1,0 +1,26 @@
+@()
+
+@main("Message Importer") {
+
+  <form enctype="multipart/form-data">
+    <input name="file" type="file" />
+    <input type="button" value="Upload" />
+  </form>
+
+  <script type="text/javascript">
+    $(':button').click(function(){
+        var formData = new FormData($('form')[0]);
+        $.ajax({
+            url: '/importer',  //server script to process data
+            type: 'POST',
+            // Form data
+            data: formData,
+            //Options to tell JQuery not to process data or worry about content-type
+            cache: false,
+            contentType: false,
+            processData: false
+        });
+    });
+  </script>
+
+}

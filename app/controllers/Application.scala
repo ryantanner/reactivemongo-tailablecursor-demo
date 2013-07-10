@@ -11,19 +11,33 @@ import play.api.Play.current
 import play.api.libs.json._
 import play.api.libs.iteratee._
 
-import scala.concurrent.{ ExecutionContext, Future }
+import scala.concurrent._
+import play.api.libs.concurrent.Akka
+import scala.concurrent.duration._
+import scala.concurrent.duration.Duration
+import scala.concurrent.Await
+import scala.concurrent.Future
+import akka.util.Timeout
+import akka.actor.Props
+import akka.pattern.ask
 
 import play.modules.reactivemongo._
 import play.modules.reactivemongo.json.collection.JSONCollection
 
 import reactivemongo.api._
 
+import actors._
+
 object Application extends Controller with MongoController {
+
+  implicit val timeout = Timeout(1 second)
+
+  val source = Akka.system.actorOf(Props[ContactScore])
 
   // let's be sure that the collections exists and is capped
   val futureCollection: Future[JSONCollection] = {
     val db = ReactiveMongoPlugin.db
-    val collection = db.collection[JSONCollection]("acappedcollection")
+    val collection = db.collection[JSONCollection]("messages")
     collection.stats().flatMap {
       case stats if !stats.capped =>
         // the collection is not capped, so we convert it
@@ -40,7 +54,7 @@ object Application extends Controller with MongoController {
       collection
     }
   }
-
+  
   def index = Action {
     Ok(views.html.index())
   }
@@ -58,7 +72,7 @@ object Application extends Controller with MongoController {
         // so we are sure that the collection exists and is a capped one
         val cursor: Cursor[JsValue] = collection
           // we want all the documents
-          .find(Json.obj())
+          .find(Json.obj("uid" -> "1"))
           // the cursor must be tailable and await data
           .options(QueryOpts().tailable.awaitData)
           .cursor[JsValue]
@@ -66,10 +80,36 @@ object Application extends Controller with MongoController {
         // ok, let's enumerate it
         cursor.enumerate
       }
+
+      val scorer = Iteratee.foreach[JsValue] { json =>
+        Logger.debug("sending json")
+        source ! Message(json)
+      }
+
+      Enumerator.flatten(futureEnumerator)(scorer)
       Enumerator.flatten(futureEnumerator)
     }
 
     // We're done!
     (in, out)
   }
+
+  def watchScore = WebSocket.using[JsValue] { request =>
+
+    Logger.debug("starting score...")
+
+    val in = Iteratee.foreach[JsValue] { json =>
+      println(json)
+    }
+
+    val out = Enumerator.flatten((source ? Listen).map {
+        case Connected(enumerator) => enumerator
+      })
+
+    out(in)
+
+    (in, out)
+
+  }
+
 }
